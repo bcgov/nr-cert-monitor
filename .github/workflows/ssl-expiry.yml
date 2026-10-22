@@ -1,0 +1,61 @@
+name: SSL Expiry Monitor
+
+on:
+  schedule:
+    - cron: '0 14 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  check-ssl:
+    name: Check SSL/TLS Expiry
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Inspect SSL/TLS Certificates
+        id: cert-audit
+        run: bash scripts/check-certs.sh rules.yml
+
+      - name: Manage GitHub Alert Issue
+        if: steps.cert-audit.outputs.has_breach == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TITLE_PREFIX: ${{ steps.cert-audit.outputs.title_prefix }}
+          ISSUE_TITLE: ${{ steps.cert-audit.outputs.issue_title }}
+          ASSIGNEES: ${{ steps.cert-audit.outputs.assignees }}
+          LABELS: ${{ steps.cert-audit.outputs.labels }}
+          ALERT_BODY: ${{ steps.cert-audit.outputs.alert_body }}
+        run: |
+          BODY_FILE=$(mktemp)
+          printf "%s\n" "$ALERT_BODY" > "$BODY_FILE"
+
+          EXISTING_ISSUE=$(gh issue list --state open --json number,title --jq ".[] | select(.title | startswith(\"$TITLE_PREFIX\")) | .number" | head -n 1)
+
+          if [ -n "$EXISTING_ISSUE" ]; then
+            echo "Updating existing open issue #$EXISTING_ISSUE"
+            EDIT_ARGS=("$EXISTING_ISSUE" --title "$ISSUE_TITLE")
+            if [ -n "$ASSIGNEES" ]; then
+              EDIT_ARGS+=(--add-assignee "$ASSIGNEES")
+            fi
+            if [ -n "$LABELS" ]; then
+              EDIT_ARGS+=(--add-label "$LABELS")
+            fi
+            gh issue edit "${EDIT_ARGS[@]}"
+            gh issue comment "$EXISTING_ISSUE" --body-file "$BODY_FILE"
+          else
+            echo "Creating new alert issue"
+            CREATE_ARGS=(--title "$ISSUE_TITLE" --body-file "$BODY_FILE")
+            if [ -n "$ASSIGNEES" ]; then
+              CREATE_ARGS+=(--assignee "$ASSIGNEES")
+            fi
+            if [ -n "$LABELS" ]; then
+              CREATE_ARGS+=(--label "$LABELS")
+            fi
+            gh issue create "${CREATE_ARGS[@]}"
+          fi
+          rm -f "$BODY_FILE"

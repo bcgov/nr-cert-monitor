@@ -1,0 +1,29 @@
+# SSL/TLS Certificate Expiry Monitoring Configuration
+# User-facing configuration template - every key the engine reads is required here;
+# there are no built-in defaults.
+# Exception: issue.labels, monitoring.domains[].warning_days, and monitoring.domains[].port
+# are optional. When absent, issue.labels means [] (no labels), and domain-level
+# warning_days/port inherit from the technical block.
+
+technical:
+  warning_days: 30 # Threshold in days before an expiry triggers an alert
+  timeout_seconds: 10 # Hard timeout per TLS handshake
+  port: 443 # Default TLS port
+
+issue:
+  # Prefix used for idempotency checks (preventing duplicate weekly issues)
+  # Must not match exclusions.title_prefixes in bcgov/project-automator
+  title_prefix: "SSL Expiry: "
+  assignees:
+    - DerekRoberts
+  labels: # Optional; label names applied to created alert issues
+    - security
+    - ssl-expiry
+
+monitoring:
+  # Vanity URLs to inspect via TLS SNI handshake
+  domains:
+    - host: "example.gov.bc.ca"
+      description: "Example Vanity URL (Replace with actual targets)"
+      # warning_days: 45 # Optional per-domain override
+      # port: 8443 # Optional per-domain override
