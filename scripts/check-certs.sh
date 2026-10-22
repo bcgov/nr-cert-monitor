@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Fail-fast tool checks
-for cmd in openssl yq jq date; do
+for cmd in openssl jq date; do
   if ! command -v "$cmd" >/dev/null 2>&1; then
     echo "::error::Required command '$cmd' is not installed or not in PATH." >&2
     exit 1
@@ -24,8 +24,12 @@ if [ ! -f "$CONFIG_FILE" ]; then
 fi
 
 # Convert YAML to JSON for schema validation
-if ! CONFIG_JSON=$(yq -o=json eval '.' "$CONFIG_FILE" 2>/dev/null); then
-  echo "::error::Failed to parse '$CONFIG_FILE': Invalid YAML syntax or empty file." >&2
+if command -v yq >/dev/null 2>&1; then
+  CONFIG_JSON=$(yq -o=json eval '.' "$CONFIG_FILE" 2>/dev/null || true)
+elif command -v python3 >/dev/null 2>&1 && python3 -c "import yaml" >/dev/null 2>&1; then
+  CONFIG_JSON=$(python3 -c 'import sys, yaml, json; json.dump(yaml.safe_load(sys.stdin), sys.stdout)' < "$CONFIG_FILE" 2>/dev/null || true)
+else
+  echo "::error::No YAML parser found. Please install 'yq' or 'python3-yaml'." >&2
   exit 1
 fi
 
@@ -137,7 +141,7 @@ while IFS= read -r domain_json; do
     breach_rows+=$'\n'"| $status | $host | $port | $desc | N/A | N/A | ${warn_days}d |"
     summary_rows+=$'\n'"| $status | $host | $port | $desc | N/A | N/A | ${warn_days}d |"
   fi
-done < <(yq -o=json -I=0 '.monitoring.domains[]' "$CONFIG_FILE")
+done < <(echo "$CONFIG_JSON" | jq -c '.monitoring.domains[]')
 
 echo "[AUDIT] Inspection completed. Domains inspected. Breaches found: $breach_count"
 
