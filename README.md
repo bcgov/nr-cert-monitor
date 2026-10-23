@@ -33,6 +33,9 @@ monitoring:
   domains:
     - host: "fom.nrs.gov.bc.ca"
       description: "Forest Operations Map"
+      assignees:           # Optional per-domain override; defaults to issue.assignees
+        - DerekRoberts
+        - fomLeadDev
     - host: "silva.nrs.gov.bc.ca"
       description: "Silva"
 ```

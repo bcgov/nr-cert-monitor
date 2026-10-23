@@ -74,6 +74,11 @@ if ! echo "$CONFIG_JSON" | jq -e '.monitoring.domains | all((.host | type == "st
   exit 1
 fi
 
+if ! echo "$CONFIG_JSON" | jq -e '.monitoring.domains | all(.assignees == null or (.assignees | type == "array" and all(type == "string" and length > 0)))' >/dev/null 2>&1; then
+  echo "::error::Invalid assignees in .monitoring.domains: if specified, 'assignees' must be an array of non-empty strings" >&2
+  exit 1
+fi
+
 # Extract technical defaults and issue settings
 TECH_WARN_DAYS=$(echo "$CONFIG_JSON" | jq -r '.technical.warning_days')
 TECH_TIMEOUT_SEC=$(echo "$CONFIG_JSON" | jq -r '.technical.timeout_seconds')
@@ -86,6 +91,7 @@ has_breach="false"
 breach_count=0
 summary_rows=""
 breach_rows=""
+breaches_array=()
 
 echo "[AUDIT] Starting SSL/TLS certificate inspection with config: $CONFIG_FILE"
 
@@ -97,6 +103,7 @@ while IFS= read -r domain_json; do
   desc=$(echo "$domain_json" | jq -r '.description')
   port=$(echo "$domain_json" | jq -r --argjson default_port "$TECH_PORT" '.port // $default_port')
   warn_days=$(echo "$domain_json" | jq -r --argjson default_warn "$TECH_WARN_DAYS" '.warning_days // $default_warn')
+  domain_assignees=$(echo "$domain_json" | jq -r --argjson default_assignees "$(echo "$CONFIG_JSON" | jq '.issue.assignees')" '(.assignees // $default_assignees) | join(",")')
 
   # Run openssl s_client with timeout and SNI (-servername)
   cert_raw=$(timeout "$TECH_TIMEOUT_SEC" openssl s_client -servername "$host" -connect "${host}:${port}" </dev/null 2>/dev/null || true)
@@ -120,6 +127,17 @@ while IFS= read -r domain_json; do
           echo "[AUDIT] BREACH (Expiring): $host:$port ($desc) - Expires in $days_left day(s) (threshold: ${warn_days}d, expiry: $formatted_date)"
         fi
         breach_rows+=$'\n'"| $status | $host | $port | $desc | $formatted_date | ${days_left}d | ${warn_days}d |"
+        breach_obj=$(jq -n \
+          --arg host "$host" \
+          --arg desc "$desc" \
+          --argjson port "$port" \
+          --arg status "$status" \
+          --arg expiry_date "$formatted_date" \
+          --arg days_left "$days_left" \
+          --arg threshold "$warn_days" \
+          --arg assignees "$domain_assignees" \
+          '{host: $host, description: $desc, port: $port, status: $status, expiry_date: $expiry_date, days_left: $days_left, threshold: $threshold, assignees: $assignees}')
+        breaches_array+=("$breach_obj")
       else
         status="✅ Healthy"
         echo "[AUDIT] OK: $host:$port ($desc) - Expires in $days_left day(s) ($formatted_date)"
@@ -132,6 +150,17 @@ while IFS= read -r domain_json; do
       echo "[AUDIT] BREACH (Unreachable): $host:$port ($desc) - Invalid certificate date format: $expiry_str"
       breach_rows+=$'\n'"| $status | $host | $port | $desc | N/A | N/A | ${warn_days}d |"
       summary_rows+=$'\n'"| $status | $host | $port | $desc | N/A | N/A | ${warn_days}d |"
+      breach_obj=$(jq -n \
+        --arg host "$host" \
+        --arg desc "$desc" \
+        --argjson port "$port" \
+        --arg status "$status" \
+        --arg expiry_date "N/A" \
+        --arg days_left "N/A" \
+        --arg threshold "$warn_days" \
+        --arg assignees "$domain_assignees" \
+        '{host: $host, description: $desc, port: $port, status: $status, expiry_date: $expiry_date, days_left: $days_left, threshold: $threshold, assignees: $assignees}')
+      breaches_array+=("$breach_obj")
     fi
   else
     has_breach="true"
@@ -140,10 +169,29 @@ while IFS= read -r domain_json; do
     echo "[AUDIT] BREACH (Unreachable): $host:$port ($desc) - Connection or TLS handshake failed"
     breach_rows+=$'\n'"| $status | $host | $port | $desc | N/A | N/A | ${warn_days}d |"
     summary_rows+=$'\n'"| $status | $host | $port | $desc | N/A | N/A | ${warn_days}d |"
+    breach_obj=$(jq -n \
+      --arg host "$host" \
+      --arg desc "$desc" \
+      --argjson port "$port" \
+      --arg status "$status" \
+      --arg expiry_date "N/A" \
+      --arg days_left "N/A" \
+      --arg threshold "$warn_days" \
+      --arg assignees "$domain_assignees" \
+      '{host: $host, description: $desc, port: $port, status: $status, expiry_date: $expiry_date, days_left: $days_left, threshold: $threshold, assignees: $assignees}')
+    breaches_array+=("$breach_obj")
   fi
 done < <(echo "$CONFIG_JSON" | jq -c '.monitoring.domains[]')
 
 echo "[AUDIT] Inspection completed. Domains inspected. Breaches found: $breach_count"
+
+# Save structured breaches file
+mkdir -p ./.tmp
+if [ "$has_breach" = "true" ] && [ "${#breaches_array[@]}" -gt 0 ]; then
+  printf "%s\n" "${breaches_array[@]}" | jq -s '.' > ./.tmp/breaches.json
+else
+  echo "[]" > ./.tmp/breaches.json
+fi
 
 # Construct alert body and issue title if breaches occurred
 if [ "$has_breach" = "true" ]; then
@@ -178,6 +226,7 @@ if [ -n "${GITHUB_OUTPUT:-}" ]; then
     echo "has_breach=$has_breach"
     echo "breach_count=$breach_count"
     echo "title_prefix=$TITLE_PREFIX"
+    echo "breaches_file=./.tmp/breaches.json"
     echo "issue_title=$issue_title"
     echo "assignees=$ASSIGNEES_CSV"
     echo "labels=$LABELS_CSV"
