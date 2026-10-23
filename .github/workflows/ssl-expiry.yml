@@ -22,12 +22,12 @@ jobs:
         run: bash scripts/check-certs.sh rules.yml
 
       - name: Manage GitHub Alert Issues
-        if: steps.cert-audit.outputs.has_breach == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TITLE_PREFIX: ${{ steps.cert-audit.outputs.title_prefix }}
           LABELS: ${{ steps.cert-audit.outputs.labels }}
           BREACHES_FILE: ${{ steps.cert-audit.outputs.breaches_file }}
+          HEALTHY_FILE: ${{ steps.cert-audit.outputs.healthy_file }}
         run: |
           if [ -n "$LABELS" ]; then
             IFS=',' read -ra LABEL_ARRAY <<< "$LABELS"
@@ -39,75 +39,92 @@ jobs:
             done
           fi
 
-          if [ ! -f "$BREACHES_FILE" ]; then
-            echo "No breaches file found at '$BREACHES_FILE'."
-            exit 0
+          if [ -f "$BREACHES_FILE" ]; then
+            while IFS= read -r breach; do
+              [ -z "$breach" ] && continue
+              host=$(echo "$breach" | jq -r '.host')
+              desc=$(echo "$breach" | jq -r '.description')
+              port=$(echo "$breach" | jq -r '.port')
+              status=$(echo "$breach" | jq -r '.status')
+              expiry_date=$(echo "$breach" | jq -r '.expiry_date')
+              days_left=$(echo "$breach" | jq -r '.days_left')
+              assignees=$(echo "$breach" | jq -r '.assignees')
+
+              search_prefix="${TITLE_PREFIX}${host}"
+              if [ "$days_left" != "null" ] && [ "$days_left" != "N/A" ]; then
+                issue_title="${search_prefix} (${days_left}d remaining)"
+                days_display="${days_left}d"
+              else
+                issue_title="${search_prefix} (unreachable)"
+                days_display="N/A"
+              fi
+
+              display_host="$host"
+              [ "$port" != "443" ] && display_host="${host}:${port}"
+
+              BODY_FILE=$(mktemp)
+              {
+                echo "### ⚠️ SSL/TLS Certificate Expiry Alert: $host"
+                echo ""
+                echo "The domain **$host** ($desc) requires attention due to upcoming SSL/TLS certificate expiration or connection failure."
+                echo ""
+                echo "| Status | Host | Description | Expiry Date | Days Left |"
+                echo "| :--- | :--- | :--- | :--- | :--- |"
+                echo "| $status | $display_host | $desc | $expiry_date | $days_display |"
+              } > "$BODY_FILE"
+
+              EXISTING_ISSUE=$(gh issue list --state open --json number,title --jq ".[] | select(.title | startswith(\"$search_prefix\")) | .number" | head -n 1)
+
+              if [ -z "$EXISTING_ISSUE" ]; then
+                # Adopt legacy batch issue if matching this domain
+                LEGACY_ISSUE=$(gh issue list --state open --json number,title,body --jq ".[] | select(.title | test(\"^${TITLE_PREFIX}[0-9]+ domain\")) | select(.body | contains(\"$host\")) | .number" | head -n 1)
+                if [ -n "$LEGACY_ISSUE" ]; then
+                  EXISTING_ISSUE="$LEGACY_ISSUE"
+                fi
+              fi
+
+              if [ -n "$EXISTING_ISSUE" ]; then
+                echo "Updating existing open issue #$EXISTING_ISSUE for $host"
+                EDIT_ARGS=("$EXISTING_ISSUE" --title "$issue_title")
+                if [ -n "$assignees" ]; then
+                  EDIT_ARGS+=(--add-assignee "$assignees")
+                fi
+                if [ -n "$LABELS" ]; then
+                  EDIT_ARGS+=(--add-label "$LABELS")
+                fi
+                gh issue edit "${EDIT_ARGS[@]}"
+                gh issue comment "$EXISTING_ISSUE" --body-file "$BODY_FILE"
+              else
+                echo "Creating new alert issue for $host"
+                CREATE_ARGS=(--title "$issue_title" --body-file "$BODY_FILE")
+                if [ -n "$assignees" ]; then
+                  CREATE_ARGS+=(--assignee "$assignees")
+                fi
+                if [ -n "$LABELS" ]; then
+                  CREATE_ARGS+=(--label "$LABELS")
+                fi
+                gh issue create "${CREATE_ARGS[@]}"
+              fi
+              rm -f "$BODY_FILE"
+            done < <(jq -c '.[]' "$BREACHES_FILE" 2>/dev/null || true)
           fi
 
-          while IFS= read -r breach; do
-            [ -z "$breach" ] && continue
-            host=$(echo "$breach" | jq -r '.host')
-            desc=$(echo "$breach" | jq -r '.description')
-            port=$(echo "$breach" | jq -r '.port')
-            status=$(echo "$breach" | jq -r '.status')
-            expiry_date=$(echo "$breach" | jq -r '.expiry_date')
-            days_left=$(echo "$breach" | jq -r '.days_left')
-            assignees=$(echo "$breach" | jq -r '.assignees')
+          if [ -f "$HEALTHY_FILE" ]; then
+            while IFS= read -r healthy; do
+              [ -z "$healthy" ] && continue
+              host=$(echo "$healthy" | jq -r '.host')
+              expiry_date=$(echo "$healthy" | jq -r '.expiry_date')
+              days_left=$(echo "$healthy" | jq -r '.days_left')
 
-            search_prefix="${TITLE_PREFIX}${host}"
-            if [ "$days_left" != "null" ] && [ "$days_left" != "N/A" ]; then
-              issue_title="${search_prefix} (${days_left}d remaining)"
-              days_display="${days_left}d"
-            else
-              issue_title="${search_prefix} (unreachable)"
-              days_display="N/A"
-            fi
+              search_prefix="${TITLE_PREFIX}${host}"
+              OPEN_ISSUES=$(gh issue list --state open --json number,title --jq ".[] | select(.title | startswith(\"$search_prefix\")) | .number")
 
-            display_host="$host"
-            [ "$port" != "443" ] && display_host="${host}:${port}"
-
-            BODY_FILE=$(mktemp)
-            {
-              echo "### ⚠️ SSL/TLS Certificate Expiry Alert: $host"
-              echo ""
-              echo "The domain **$host** ($desc) requires attention due to upcoming SSL/TLS certificate expiration or connection failure."
-              echo ""
-              echo "| Status | Host | Description | Expiry Date | Days Left |"
-              echo "| :--- | :--- | :--- | :--- | :--- |"
-              echo "| $status | $display_host | $desc | $expiry_date | $days_display |"
-            } > "$BODY_FILE"
-
-            EXISTING_ISSUE=$(gh issue list --state open --json number,title --jq ".[] | select(.title | startswith(\"$search_prefix\")) | .number" | head -n 1)
-
-            if [ -z "$EXISTING_ISSUE" ]; then
-              # Adopt legacy batch issue if matching this domain
-              LEGACY_ISSUE=$(gh issue list --state open --json number,title,body --jq ".[] | select(.title | test(\"^${TITLE_PREFIX}[0-9]+ domain\")) | select(.body | contains(\"$host\")) | .number" | head -n 1)
-              if [ -n "$LEGACY_ISSUE" ]; then
-                EXISTING_ISSUE="$LEGACY_ISSUE"
-              fi
-            fi
-
-            if [ -n "$EXISTING_ISSUE" ]; then
-              echo "Updating existing open issue #$EXISTING_ISSUE for $host"
-              EDIT_ARGS=("$EXISTING_ISSUE" --title "$issue_title")
-              if [ -n "$assignees" ]; then
-                EDIT_ARGS+=(--add-assignee "$assignees")
-              fi
-              if [ -n "$LABELS" ]; then
-                EDIT_ARGS+=(--add-label "$LABELS")
-              fi
-              gh issue edit "${EDIT_ARGS[@]}"
-              gh issue comment "$EXISTING_ISSUE" --body-file "$BODY_FILE"
-            else
-              echo "Creating new alert issue for $host"
-              CREATE_ARGS=(--title "$issue_title" --body-file "$BODY_FILE")
-              if [ -n "$assignees" ]; then
-                CREATE_ARGS+=(--assignee "$assignees")
-              fi
-              if [ -n "$LABELS" ]; then
-                CREATE_ARGS+=(--label "$LABELS")
-              fi
-              gh issue create "${CREATE_ARGS[@]}"
-            fi
-            rm -f "$BODY_FILE"
-          done < <(jq -c '.[]' "$BREACHES_FILE")
+              for issue_num in $OPEN_ISSUES; do
+                [ -z "$issue_num" ] && continue
+                echo "Resolving and closing issue #$issue_num: certificate for $host is renewed/healthy ($expiry_date, ${days_left}d remaining)"
+                gh issue close "$issue_num" \
+                  --comment "✅ **SSL/TLS Certificate Renewed:** The certificate for **$host** has been renewed/updated. It expires in ${days_left} days ($expiry_date). Automatically resolving and closing this alert." \
+                  --reason "completed"
+              done
+            done < <(jq -c '.[]' "$HEALTHY_FILE" 2>/dev/null || true)
+          fi

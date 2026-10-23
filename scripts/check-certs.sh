@@ -92,6 +92,7 @@ breach_count=0
 summary_rows=""
 breach_rows=""
 breaches_array=()
+healthy_array=()
 
 echo "[AUDIT] Starting SSL/TLS certificate inspection with config: $CONFIG_FILE"
 
@@ -144,6 +145,15 @@ while IFS= read -r domain_json; do
       else
         status="✅ Healthy"
         echo "[AUDIT] OK: $host:$port ($desc) - Expires in $days_left day(s) ($formatted_date)"
+        healthy_obj=$(jq -n \
+          --arg host "$host" \
+          --arg desc "$desc" \
+          --argjson port "$port" \
+          --arg status "$status" \
+          --arg expiry_date "$formatted_date" \
+          --arg days_left "$days_left" \
+          '{host: $host, description: $desc, port: $port, status: $status, expiry_date: $expiry_date, days_left: $days_left}')
+        healthy_array+=("$healthy_obj")
       fi
       summary_rows+=$'\n'"| $status | $display_host | $desc | $formatted_date | ${days_left}d |"
     else
@@ -188,12 +198,18 @@ done < <(echo "$CONFIG_JSON" | jq -c '.monitoring.domains[]')
 
 echo "[AUDIT] Inspection completed. Domains inspected. Breaches found: $breach_count"
 
-# Save structured breaches file
+# Save structured breaches and healthy files
 mkdir -p ./.tmp
 if [ "$has_breach" = "true" ] && [ "${#breaches_array[@]}" -gt 0 ]; then
   printf "%s\n" "${breaches_array[@]}" | jq -s '.' > ./.tmp/breaches.json
 else
   echo "[]" > ./.tmp/breaches.json
+fi
+
+if [ "${#healthy_array[@]}" -gt 0 ]; then
+  printf "%s\n" "${healthy_array[@]}" | jq -s '.' > ./.tmp/healthy.json
+else
+  echo "[]" > ./.tmp/healthy.json
 fi
 
 # Construct alert body and issue title if breaches occurred
@@ -230,6 +246,7 @@ if [ -n "${GITHUB_OUTPUT:-}" ]; then
     echo "breach_count=$breach_count"
     echo "title_prefix=$TITLE_PREFIX"
     echo "breaches_file=./.tmp/breaches.json"
+    echo "healthy_file=./.tmp/healthy.json"
     echo "issue_title=$issue_title"
     echo "assignees=$ASSIGNEES_CSV"
     echo "labels=$LABELS_CSV"

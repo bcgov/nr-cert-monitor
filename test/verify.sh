@@ -8,7 +8,8 @@ echo "OK: rules.yml is valid YAML."
 echo "=== 2. Running audit against current rules.yml ==="
 bash scripts/check-certs.sh rules.yml
 test -f ./.tmp/breaches.json
-echo "OK: check-certs.sh completed and generated ./.tmp/breaches.json."
+test -f ./.tmp/healthy.json
+echo "OK: check-certs.sh completed and generated ./.tmp/breaches.json and ./.tmp/healthy.json."
 
 echo "=== 3. Testing fail-fast validation against invalid configs ==="
 TEST_TMP=$(mktemp -d)
