@@ -34,6 +34,16 @@ jobs:
           BODY_FILE=$(mktemp)
           printf "%s\n" "$ALERT_BODY" > "$BODY_FILE"
 
+          if [ -n "$LABELS" ]; then
+            IFS=',' read -ra LABEL_ARRAY <<< "$LABELS"
+            for lbl in "${LABEL_ARRAY[@]}"; do
+              lbl=$(echo "$lbl" | xargs)
+              if [ -n "$lbl" ]; then
+                gh label create "$lbl" --force 2>/dev/null || true
+              fi
+            done
+          fi
+
           EXISTING_ISSUE=$(gh issue list --state open --json number,title --jq ".[] | select(.title | startswith(\"$TITLE_PREFIX\")) | .number" | head -n 1)
 
           if [ -n "$EXISTING_ISSUE" ]; then
