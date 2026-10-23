@@ -105,6 +105,9 @@ while IFS= read -r domain_json; do
   warn_days=$(echo "$domain_json" | jq -r --argjson default_warn "$TECH_WARN_DAYS" '.warning_days // $default_warn')
   domain_assignees=$(echo "$domain_json" | jq -r --argjson default_assignees "$(echo "$CONFIG_JSON" | jq '.issue.assignees')" '(.assignees // $default_assignees) | join(",")')
 
+  display_host="$host"
+  [ "$port" != "443" ] && display_host="${host}:${port}"
+
   # Run openssl s_client with timeout and SNI (-servername)
   cert_raw=$(timeout "$TECH_TIMEOUT_SEC" openssl s_client -servername "$host" -connect "${host}:${port}" </dev/null 2>/dev/null || true)
   enddate_line=$(echo "$cert_raw" | openssl x509 -noout -enddate 2>/dev/null || true)
@@ -114,7 +117,7 @@ while IFS= read -r domain_json; do
     if expiry_epoch=$(date -u -d "$expiry_str" +%s 2>/dev/null); then
       now_epoch=$(date -u +%s)
       days_left=$(( (expiry_epoch - now_epoch) / 86400 ))
-      formatted_date=$(date -u -d "$expiry_str" "+%Y-%m-%d %H:%M:%S UTC")
+      formatted_date=$(date -u -d "$expiry_str" "+%Y-%m-%d")
 
       if [ "$days_left" -lt "$warn_days" ]; then
         has_breach="true"
@@ -126,7 +129,7 @@ while IFS= read -r domain_json; do
           status="⚠️ Expiring"
           echo "[AUDIT] BREACH (Expiring): $host:$port ($desc) - Expires in $days_left day(s) (threshold: ${warn_days}d, expiry: $formatted_date)"
         fi
-        breach_rows+=$'\n'"| $status | $host | $port | $desc | $formatted_date | ${days_left}d | ${warn_days}d |"
+        breach_rows+=$'\n'"| $status | $display_host | $desc | $formatted_date | ${days_left}d |"
         breach_obj=$(jq -n \
           --arg host "$host" \
           --arg desc "$desc" \
@@ -142,14 +145,14 @@ while IFS= read -r domain_json; do
         status="✅ Healthy"
         echo "[AUDIT] OK: $host:$port ($desc) - Expires in $days_left day(s) ($formatted_date)"
       fi
-      summary_rows+=$'\n'"| $status | $host | $port | $desc | $formatted_date | ${days_left}d | ${warn_days}d |"
+      summary_rows+=$'\n'"| $status | $display_host | $desc | $formatted_date | ${days_left}d |"
     else
       has_breach="true"
       breach_count=$((breach_count + 1))
       status="❌ Unreachable"
       echo "[AUDIT] BREACH (Unreachable): $host:$port ($desc) - Invalid certificate date format: $expiry_str"
-      breach_rows+=$'\n'"| $status | $host | $port | $desc | N/A | N/A | ${warn_days}d |"
-      summary_rows+=$'\n'"| $status | $host | $port | $desc | N/A | N/A | ${warn_days}d |"
+      breach_rows+=$'\n'"| $status | $display_host | $desc | N/A | N/A |"
+      summary_rows+=$'\n'"| $status | $display_host | $desc | N/A | N/A |"
       breach_obj=$(jq -n \
         --arg host "$host" \
         --arg desc "$desc" \
@@ -167,8 +170,8 @@ while IFS= read -r domain_json; do
     breach_count=$((breach_count + 1))
     status="❌ Unreachable"
     echo "[AUDIT] BREACH (Unreachable): $host:$port ($desc) - Connection or TLS handshake failed"
-    breach_rows+=$'\n'"| $status | $host | $port | $desc | N/A | N/A | ${warn_days}d |"
-    summary_rows+=$'\n'"| $status | $host | $port | $desc | N/A | N/A | ${warn_days}d |"
+    breach_rows+=$'\n'"| $status | $display_host | $desc | N/A | N/A |"
+    summary_rows+=$'\n'"| $status | $display_host | $desc | N/A | N/A |"
     breach_obj=$(jq -n \
       --arg host "$host" \
       --arg desc "$desc" \
@@ -201,8 +204,8 @@ if [ "$has_breach" = "true" ]; then
 
 The following domain(s) require immediate attention due to upcoming SSL/TLS certificate expiration or connection failures:
 
-| Status | Host | Port | Description | Expiry Date (UTC) | Days Left | Threshold |
-| :--- | :--- | :--- | :--- | :--- | :--- | :--- |$breach_rows
+| Status | Host | Description | Expiry Date | Days Left |
+| :--- | :--- | :--- | :--- | :--- |$breach_rows
 EOF
 )
 else
@@ -215,8 +218,8 @@ if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
   cat <<EOF >> "$GITHUB_STEP_SUMMARY"
 ### SSL/TLS Certificate Expiry Audit Summary
 
-| Status | Host | Port | Description | Expiry Date (UTC) | Days Left | Threshold |
-| :--- | :--- | :--- | :--- | :--- | :--- | :--- |$summary_rows
+| Status | Host | Description | Expiry Date | Days Left |
+| :--- | :--- | :--- | :--- | :--- |$summary_rows
 EOF
 fi
 

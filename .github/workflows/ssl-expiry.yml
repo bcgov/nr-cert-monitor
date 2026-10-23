@@ -58,9 +58,14 @@ jobs:
             search_prefix="${TITLE_PREFIX}${host}"
             if [ "$days_left" != "null" ] && [ "$days_left" != "N/A" ]; then
               issue_title="${search_prefix} (${days_left}d remaining)"
+              days_display="${days_left}d"
             else
               issue_title="${search_prefix} (unreachable)"
+              days_display="N/A"
             fi
+
+            display_host="$host"
+            [ "$port" != "443" ] && display_host="${host}:${port}"
 
             BODY_FILE=$(mktemp)
             {
@@ -68,9 +73,9 @@ jobs:
               echo ""
               echo "The domain **$host** ($desc) requires attention due to upcoming SSL/TLS certificate expiration or connection failure."
               echo ""
-              echo "| Status | Host | Port | Description | Expiry Date (UTC) | Days Left | Threshold |"
-              echo "| :--- | :--- | :--- | :--- | :--- | :--- | :--- |"
-              echo "| $status | $host | $port | $desc | $expiry_date | ${days_left}d | ${threshold}d |"
+              echo "| Status | Host | Description | Expiry Date | Days Left |"
+              echo "| :--- | :--- | :--- | :--- | :--- |"
+              echo "| $status | $display_host | $desc | $expiry_date | $days_display |"
             } > "$BODY_FILE"
 
             EXISTING_ISSUE=$(gh issue list --state open --json number,title --jq ".[] | select(.title | startswith(\"$search_prefix\")) | .number" | head -n 1)
