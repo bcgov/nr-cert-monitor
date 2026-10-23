@@ -63,15 +63,15 @@ jobs:
             fi
 
             BODY_FILE=$(mktemp)
-            cat <<EOF > "$BODY_FILE"
-### ⚠️ SSL/TLS Certificate Expiry Alert: $host
-
-The domain **$host** ($desc) requires attention due to upcoming SSL/TLS certificate expiration or connection failure.
-
-| Status | Host | Port | Description | Expiry Date (UTC) | Days Left | Threshold |
-| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| $status | $host | $port | $desc | $expiry_date | ${days_left}d | ${threshold}d |
-EOF
+            {
+              echo "### ⚠️ SSL/TLS Certificate Expiry Alert: $host"
+              echo ""
+              echo "The domain **$host** ($desc) requires attention due to upcoming SSL/TLS certificate expiration or connection failure."
+              echo ""
+              echo "| Status | Host | Port | Description | Expiry Date (UTC) | Days Left | Threshold |"
+              echo "| :--- | :--- | :--- | :--- | :--- | :--- | :--- |"
+              echo "| $status | $host | $port | $desc | $expiry_date | ${days_left}d | ${threshold}d |"
+            } > "$BODY_FILE"
 
             EXISTING_ISSUE=$(gh issue list --state open --json number,title --jq ".[] | select(.title | startswith(\"$search_prefix\")) | .number" | head -n 1)
 
