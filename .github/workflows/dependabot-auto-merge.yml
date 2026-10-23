@@ -1,0 +1,86 @@
+name: Dependabot Auto-Merge
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "PR number to auto-approve and merge (leave empty for all open Dependabot PRs)"
+        required: false
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: dependabot-auto-merge-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  auto-merge:
+    name: Auto-merge Dependabot PRs
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      github.event.pull_request.user.login == 'dependabot[bot]' ||
+      github.event.pull_request.user.login == 'app/dependabot'
+    runs-on: ubuntu-26.04
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Fetch Dependabot metadata
+        if: github.event_name == 'pull_request_target'
+        id: metadata
+        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Process Single Dependabot PR (pull_request_target)
+        if: github.event_name == 'pull_request_target'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          UPDATE_TYPE: ${{ steps.metadata.outputs.update-type }}
+        run: |
+          set -euo pipefail
+          echo "Approving PR $PR_URL"
+          gh pr review --approve "$PR_URL"
+
+          if [ "$UPDATE_TYPE" != "version-update:semver-major" ]; then
+            echo "Enabling auto-merge for non-major update on $PR_URL"
+            gh pr merge --auto --squash --delete-branch "$PR_URL"
+          else
+            echo "Skipping auto-merge: semver-major update requires manual review."
+          fi
+
+      - name: Process Existing Dependabot PRs (workflow_dispatch)
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SPECIFIC_PR: ${{ inputs.pr_number }}
+        run: |
+          set -euo pipefail
+          if [ -n "$SPECIFIC_PR" ]; then
+            PR_LIST=("$SPECIFIC_PR")
+          else
+            mapfile -t PR_LIST < <(gh pr list --state open --json number,author --jq '.[] | select(.author.login == "app/dependabot" or .author.login == "dependabot[bot]") | .number')
+          fi
+
+          if [ "${#PR_LIST[@]}" -eq 0 ]; then
+            echo "No open Dependabot pull requests found."
+            exit 0
+          fi
+
+          for pr in "${PR_LIST[@]}"; do
+            [ -z "$pr" ] && continue
+            echo "=== Processing Dependabot PR #$pr ==="
+            pr_info=$(gh pr view "$pr" --json title,url)
+            title=$(echo "$pr_info" | jq -r '.title')
+            url=$(echo "$pr_info" | jq -r '.url')
+
+            echo "Approving PR #$pr ($title)..."
+            gh pr review --approve "$url"
+
+            echo "Enabling auto-merge for PR #$pr..."
+            gh pr merge --auto --squash --delete-branch "$url" || true
+          done
