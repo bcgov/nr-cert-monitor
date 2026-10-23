@@ -1,9 +1,10 @@
 # SSL/TLS Certificate Expiry Monitoring Configuration
 # User-facing configuration template - every key the engine reads is required here;
 # there are no built-in defaults.
-# Exception: issue.labels, monitoring.domains[].warning_days, and monitoring.domains[].port
-# are optional. When absent, issue.labels means [] (no labels), and domain-level
-# warning_days/port inherit from the technical block.
+# Exception: issue.labels, monitoring.domains[].warning_days, monitoring.domains[].port,
+# and monitoring.domains[].assignees are optional. When absent, issue.labels means [] (no labels),
+# domain-level warning_days/port inherit from technical, and domain-level assignees inherit
+# from issue.assignees.
 
 technical:
   warning_days: 30 # Threshold in days before an expiry triggers an alert
@@ -11,10 +12,10 @@ technical:
   port: 443 # Default TLS port
 
 issue:
-  # Prefix used for idempotency checks (preventing duplicate weekly issues)
+  # Prefix used for idempotency checks (preventing duplicate issues)
   # Must not match exclusions.title_prefixes in bcgov/project-automator
   title_prefix: "SSL Expiry: "
-  assignees:
+  assignees: # Default maintainers assigned to alerts if not specified per domain
     - DerekRoberts
   labels: # Optional; label names applied to created alert issues
     - security
@@ -25,6 +26,9 @@ monitoring:
   domains:
     - host: "fom.nrs.gov.bc.ca"
       description: "Forest Operations Map"
+      # assignees: # Optional per-domain override; defaults to issue.assignees
+      #   - DerekRoberts
+      #   - teamLeadLogin
     - host: "fspts.nrs.gov.bc.ca"
       description: "Forest Seed Planning and Tracking"
     - host: "spar.nrs.gov.bc.ca"
