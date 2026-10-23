@@ -52,7 +52,6 @@ jobs:
             status=$(echo "$breach" | jq -r '.status')
             expiry_date=$(echo "$breach" | jq -r '.expiry_date')
             days_left=$(echo "$breach" | jq -r '.days_left')
-            threshold=$(echo "$breach" | jq -r '.threshold')
             assignees=$(echo "$breach" | jq -r '.assignees')
 
             search_prefix="${TITLE_PREFIX}${host}"
