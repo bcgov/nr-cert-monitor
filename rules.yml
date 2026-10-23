@@ -23,7 +23,19 @@ issue:
 monitoring:
   # Vanity URLs to inspect via TLS SNI handshake
   domains:
-    - host: "example.gov.bc.ca"
-      description: "Example Vanity URL (Replace with actual targets)"
-      # warning_days: 45 # Optional per-domain override
-      # port: 8443 # Optional per-domain override
+    - host: "fom.nrs.gov.bc.ca"
+      description: "Forest Operations Map"
+    - host: "fspts.nrs.gov.bc.ca"
+      description: "Forest Seed Planning and Tracking"
+    - host: "spar.nrs.gov.bc.ca"
+      description: "Seed Planning and Registry System"
+    - host: "hydra.nrs.gov.bc.ca"
+      description: "Hydra Rating Curve"
+    - host: "wasteplus.nrs.gov.bc.ca"
+      description: "Waste Plus"
+    - host: "forestclient.nrs.gov.bc.ca"
+      description: "Forest Client"
+    - host: "organicsinfo.gov.bc.ca"
+      description: "Organics Info"
+    - host: "silva.nrs.gov.bc.ca"
+      description: "Silva"
