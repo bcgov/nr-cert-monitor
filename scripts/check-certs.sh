@@ -59,11 +59,6 @@ if ! echo "$CONFIG_JSON" | jq -e '.issue.title_prefix | type == "string" and len
   exit 1
 fi
 
-if ! echo "$CONFIG_JSON" | jq -e '.issue.assignees | type == "array" and length > 0' >/dev/null 2>&1; then
-  echo "::error::Missing or invalid required key: .issue.assignees (must be a non-empty array)" >&2
-  exit 1
-fi
-
 if ! echo "$CONFIG_JSON" | jq -e '.monitoring.domains | type == "array" and length > 0' >/dev/null 2>&1; then
   echo "::error::Missing or invalid required key: .monitoring.domains (must be a non-empty array)" >&2
   exit 1
@@ -74,8 +69,8 @@ if ! echo "$CONFIG_JSON" | jq -e '.monitoring.domains | all((.host | type == "st
   exit 1
 fi
 
-if ! echo "$CONFIG_JSON" | jq -e '.monitoring.domains | all(.assignees == null or (.assignees | type == "array" and all(type == "string" and length > 0)))' >/dev/null 2>&1; then
-  echo "::error::Invalid assignees in .monitoring.domains: if specified, 'assignees' must be an array of non-empty strings" >&2
+if ! echo "$CONFIG_JSON" | jq -e '.monitoring.domains | all((.assignees | type == "array" and length > 0 and all(type == "string" and length > 0)))' >/dev/null 2>&1; then
+  echo "::error::Missing or invalid required key 'assignees' in .monitoring.domains: each domain must specify a non-empty array of GitHub assignee usernames" >&2
   exit 1
 fi
 
@@ -84,7 +79,6 @@ TECH_WARN_DAYS=$(echo "$CONFIG_JSON" | jq -r '.technical.warning_days')
 TECH_TIMEOUT_SEC=$(echo "$CONFIG_JSON" | jq -r '.technical.timeout_seconds')
 TECH_PORT=$(echo "$CONFIG_JSON" | jq -r '.technical.port')
 TITLE_PREFIX=$(echo "$CONFIG_JSON" | jq -r '.issue.title_prefix')
-ASSIGNEES_CSV=$(echo "$CONFIG_JSON" | jq -r '(.issue.assignees // []) | join(",")')
 LABELS_CSV=$(echo "$CONFIG_JSON" | jq -r '(.issue.labels // []) | join(",")')
 
 has_breach="false"
@@ -104,7 +98,7 @@ while IFS= read -r domain_json; do
   desc=$(echo "$domain_json" | jq -r '.description')
   port=$(echo "$domain_json" | jq -r --argjson default_port "$TECH_PORT" '.port // $default_port')
   warn_days=$(echo "$domain_json" | jq -r --argjson default_warn "$TECH_WARN_DAYS" '.warning_days // $default_warn')
-  domain_assignees=$(echo "$domain_json" | jq -r --argjson default_assignees "$(echo "$CONFIG_JSON" | jq '.issue.assignees')" '(.assignees // $default_assignees) | join(",")')
+  domain_assignees=$(echo "$domain_json" | jq -r '.assignees | join(",")')
 
   display_host="$host"
   [ "$port" != "443" ] && display_host="${host}:${port}"
@@ -248,7 +242,6 @@ if [ -n "${GITHUB_OUTPUT:-}" ]; then
     echo "breaches_file=./.tmp/breaches.json"
     echo "healthy_file=./.tmp/healthy.json"
     echo "issue_title=$issue_title"
-    echo "assignees=$ASSIGNEES_CSV"
     echo "labels=$LABELS_CSV"
     echo "alert_body<<EOF"
     echo "$alert_body"

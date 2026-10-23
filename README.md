@@ -23,8 +23,6 @@ technical:
 
 issue:
   title_prefix: "SSL Expiry: "
-  assignees:
-    - DerekRoberts
   labels:              # Optional; labels applied to alert issues
     - security
     - ssl-expiry
@@ -33,9 +31,25 @@ monitoring:
   domains:
     - host: "fom.nrs.gov.bc.ca"
       description: "Forest Operations Map"
-      assignees:           # Optional per-domain override; defaults to issue.assignees
+      assignees:
         - DerekRoberts
-        - fomLeadDev
     - host: "silva.nrs.gov.bc.ca"
       description: "Silva"
+      assignees:
+        - DerekRoberts
 ```
+
+## Adding Your Application
+
+Want your production vanity URL monitored? Open a Pull Request adding your service to [`rules.yml`](rules.yml) under `monitoring.domains`:
+
+```yaml
+    - host: "your-app.nrs.gov.bc.ca"
+      description: "My Application Name"
+      assignees:
+        - yourGitHubHandle  # You or your team's designated on-call GitHub handles
+```
+
+### Requirements
+- **Must be publicly reachable:** The engine inspects public vanity URLs via TLS SNI over port 443 from GitHub Actions runners.
+- **Must provide assignees:** Every domain entry must specify a non-empty `assignees` list of GitHub usernames. Automated CI tests enforce this requirement on pull requests so alert issues notify the engineers who own the service.
