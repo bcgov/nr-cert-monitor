@@ -1,9 +1,25 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "=== 1. Validating rules.yml syntax with Python ==="
-python3 -c "import yaml; yaml.safe_load(open('rules.yml'))"
-echo "OK: rules.yml is valid YAML."
+echo "=== 1. Validating rules.yml syntax and schema with Python ==="
+python3 -c "
+import yaml, sys
+data = yaml.safe_load(open('rules.yml'))
+domains = data.get('monitoring', {}).get('domains', [])
+if not domains:
+    sys.exit('FAIL: No domains found in rules.yml')
+for d in domains:
+    host = d.get('host')
+    assignees = d.get('assignees')
+    if not host or not isinstance(host, str):
+        sys.exit(f'FAIL: Domain missing valid host: {d}')
+    if not assignees or not isinstance(assignees, list) or len(assignees) == 0:
+        sys.exit(f'FAIL: Domain {host} must specify a non-empty assignees list')
+    for a in assignees:
+        if not isinstance(a, str) or not a.strip():
+            sys.exit(f'FAIL: Domain {host} has invalid assignee: {a}')
+"
+echo "OK: rules.yml syntax and domain assignees are valid."
 
 echo "=== 2. Running audit against current rules.yml ==="
 bash scripts/check-certs.sh rules.yml
@@ -41,15 +57,52 @@ technical:
   port: 443
 issue:
   title_prefix: "Test: "
-  assignees:
-    - DerekRoberts
+monitoring:
+  domains:
+    - host: "example.com"
+      description: "Example"
+      assignees:
+        - DerekRoberts
+EOF
+if bash scripts/check-certs.sh "$TEST_TMP/missing_warn.yml" >/dev/null 2>&1; then
+  echo "FAIL: Expected failure on missing technical.warning_days" >&2
+  exit 1
+fi
+
+# Missing domain assignees
+cat <<EOF > "$TEST_TMP/missing_domain_assignees.yml"
+technical:
+  warning_days: 30
+  timeout_seconds: 10
+  port: 443
+issue:
+  title_prefix: "Test: "
 monitoring:
   domains:
     - host: "example.com"
       description: "Example"
 EOF
-if bash scripts/check-certs.sh "$TEST_TMP/missing_warn.yml" >/dev/null 2>&1; then
-  echo "FAIL: Expected failure on missing technical.warning_days" >&2
+if bash scripts/check-certs.sh "$TEST_TMP/missing_domain_assignees.yml" >/dev/null 2>&1; then
+  echo "FAIL: Expected failure on missing domain assignees" >&2
+  exit 1
+fi
+
+# Empty domain assignees array
+cat <<EOF > "$TEST_TMP/empty_domain_assignees.yml"
+technical:
+  warning_days: 30
+  timeout_seconds: 10
+  port: 443
+issue:
+  title_prefix: "Test: "
+monitoring:
+  domains:
+    - host: "example.com"
+      description: "Example"
+      assignees: []
+EOF
+if bash scripts/check-certs.sh "$TEST_TMP/empty_domain_assignees.yml" >/dev/null 2>&1; then
+  echo "FAIL: Expected failure on empty domain assignees" >&2
   exit 1
 fi
 
@@ -61,8 +114,6 @@ technical:
   port: 443
 issue:
   title_prefix: "Test: "
-  assignees:
-    - DerekRoberts
 monitoring:
   domains:
     - host: "example.com"

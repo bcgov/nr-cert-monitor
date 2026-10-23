@@ -1,10 +1,10 @@
 # SSL/TLS Certificate Expiry Monitoring Configuration
 # User-facing configuration template - every key the engine reads is required here;
 # there are no built-in defaults.
-# Exception: issue.labels, monitoring.domains[].warning_days, monitoring.domains[].port,
-# and monitoring.domains[].assignees are optional. When absent, issue.labels means [] (no labels),
-# domain-level warning_days/port inherit from technical, and domain-level assignees inherit
-# from issue.assignees.
+# Exception: issue.labels, monitoring.domains[].warning_days, and monitoring.domains[].port
+# are optional. When absent, issue.labels means [] (no labels), and domain-level
+# warning_days/port inherit from technical defaults.
+# monitoring.domains[].assignees is REQUIRED for every domain.
 
 technical:
   warning_days: 30 # Threshold in days before an expiry triggers an alert
@@ -15,8 +15,6 @@ issue:
   # Prefix used for idempotency checks (preventing duplicate issues)
   # Must not match exclusions.title_prefixes in bcgov/project-automator
   title_prefix: "SSL Expiry: "
-  assignees: # Default maintainers assigned to alerts if not specified per domain
-    - DerekRoberts
   labels: # Optional; label names applied to created alert issues
     - security
     - ssl-expiry
@@ -26,20 +24,33 @@ monitoring:
   domains:
     - host: "fom.nrs.gov.bc.ca"
       description: "Forest Operations Map"
-      # assignees: # Optional per-domain override; defaults to issue.assignees
-      #   - DerekRoberts
-      #   - teamLeadLogin
+      assignees:
+        - DerekRoberts
     - host: "fspts.nrs.gov.bc.ca"
       description: "Forest Seed Planning and Tracking"
+      assignees:
+        - DerekRoberts
     - host: "spar.nrs.gov.bc.ca"
       description: "Seed Planning and Registry System"
+      assignees:
+        - DerekRoberts
     - host: "hydra.nrs.gov.bc.ca"
       description: "Hydra Rating Curve"
+      assignees:
+        - DerekRoberts
     - host: "wasteplus.nrs.gov.bc.ca"
       description: "Waste Plus"
+      assignees:
+        - DerekRoberts
     - host: "forestclient.nrs.gov.bc.ca"
       description: "Forest Client"
+      assignees:
+        - DerekRoberts
     - host: "organicsinfo.gov.bc.ca"
       description: "Organics Info"
+      assignees:
+        - DerekRoberts
     - host: "silva.nrs.gov.bc.ca"
       description: "Silva"
+      assignees:
+        - DerekRoberts
