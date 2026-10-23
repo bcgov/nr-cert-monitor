@@ -34,6 +34,10 @@ monitoring:
       description: "Seed Planning and Registry System"
       assignees:
         - DerekRoberts
+        - paulushcgcj
+        - xiaopeng0202
+        - ngunner15
+        - craigyu
     - host: "hydra.nrs.gov.bc.ca"
       description: "Hydra Rating Curve"
       assignees:
@@ -42,10 +46,14 @@ monitoring:
       description: "Waste Plus"
       assignees:
         - DerekRoberts
+        - paulushcgcj
+        - mamartinezmejia
     - host: "forestclient.nrs.gov.bc.ca"
       description: "Forest Client"
       assignees:
         - DerekRoberts
+        - paulushcgcj
+        - mamartinezmejia
     - host: "organicsinfo.gov.bc.ca"
       description: "Organics Info"
       assignees:
@@ -54,3 +62,6 @@ monitoring:
       description: "Silva"
       assignees:
         - DerekRoberts
+        - paulushcgcj
+        - Abradat
+        - craigyu
