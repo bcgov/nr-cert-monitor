@@ -110,21 +110,56 @@ jobs:
           fi
 
           if [ -f "$HEALTHY_FILE" ]; then
+            RESOLVED_FILE=$(mktemp)
             while IFS= read -r healthy; do
               [ -z "$healthy" ] && continue
               host=$(echo "$healthy" | jq -r '.host')
+              desc=$(echo "$healthy" | jq -r '.description')
               expiry_date=$(echo "$healthy" | jq -r '.expiry_date')
               days_left=$(echo "$healthy" | jq -r '.days_left')
 
               search_prefix="${TITLE_PREFIX}${host}"
-              OPEN_ISSUES=$(gh issue list --state open --json number,title --jq ".[] | select(.title | startswith(\"$search_prefix\")) | .number")
+              OPEN_ISSUES=$(gh issue list --state open --json number,title --jq ".[] | select(.title | startswith(\"$search_prefix\")) | @json")
 
-              for issue_num in $OPEN_ISSUES; do
-                [ -z "$issue_num" ] && continue
-                echo "Resolving and closing issue #$issue_num: certificate for $host is renewed/healthy ($expiry_date, ${days_left}d remaining)"
-                gh issue close "$issue_num" \
-                  --comment "✅ **SSL/TLS Certificate Renewed:** The certificate for **$host** has been renewed/updated. It expires in ${days_left} days ($expiry_date). Automatically resolving and closing this alert." \
-                  --reason "completed"
-              done
+              if [ -n "$OPEN_ISSUES" ]; then
+                while IFS= read -r issue_json; do
+                  [ -z "$issue_json" ] && continue
+                  issue_num=$(echo "$issue_json" | jq -r '.number')
+                  issue_title=$(echo "$issue_json" | jq -r '.title')
+
+                  prev_state="expiring"
+                  if [[ "$issue_title" =~ unreachable ]]; then
+                    prev_state="unreachable"
+                  elif [[ "$issue_title" =~ -[0-9]+d[[:space:]]remaining ]]; then
+                    prev_state="expired"
+                  fi
+
+                  echo "Resolving and closing issue #$issue_num: certificate for $host is renewed/healthy ($expiry_date, ${days_left}d remaining)"
+                  gh issue close "$issue_num" \
+                    --comment "✅ **SSL/TLS Certificate Renewed:** The certificate for **$host** has been renewed/updated. It expires in ${days_left} days ($expiry_date). Automatically resolving and closing this alert." \
+                    --reason "completed"
+
+                  remaining_display=""
+                  if [ -n "$days_left" ] && [ "$days_left" != "N/A" ] && [ "$days_left" != "null" ]; then
+                    remaining_display=" (${days_left}d remaining)"
+                  fi
+
+                  if [ -n "$desc" ] && [ "$desc" != "$host" ]; then
+                    echo "- **$desc** (\`$host\`) turned from $prev_state to good, issue #$issue_num closed${remaining_display}." >> "$RESOLVED_FILE"
+                  else
+                    echo "- **$host** turned from $prev_state to good, issue #$issue_num closed${remaining_display}." >> "$RESOLVED_FILE"
+                  fi
+                done <<< "$OPEN_ISSUES"
+              fi
             done < <(jq -c '.[]' "$HEALTHY_FILE" 2>/dev/null || true)
+
+            if [ -s "$RESOLVED_FILE" ] && [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+              {
+                echo ""
+                echo "### 🔄 Resolved Issues"
+                echo ""
+                cat "$RESOLVED_FILE"
+              } >> "$GITHUB_STEP_SUMMARY"
+            fi
+            rm -f "$RESOLVED_FILE"
           fi
