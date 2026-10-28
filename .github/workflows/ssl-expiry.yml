@@ -40,6 +40,7 @@ jobs:
           fi
 
           if [ -f "$BREACHES_FILE" ]; then
+            ALERT_ISSUES_FILE=$(mktemp)
             while IFS= read -r breach; do
               [ -z "$breach" ] && continue
               host=$(echo "$breach" | jq -r '.host')
@@ -57,6 +58,11 @@ jobs:
               else
                 issue_title="${search_prefix} (unreachable)"
                 days_display="N/A"
+              fi
+
+              remaining_label="${days_display} remaining"
+              if [ "$days_display" = "N/A" ]; then
+                remaining_label="unreachable"
               fi
 
               display_host="$host"
@@ -94,6 +100,12 @@ jobs:
                 fi
                 gh issue edit "${EDIT_ARGS[@]}"
                 gh issue comment "$EXISTING_ISSUE" --body-file "$BODY_FILE"
+
+                if [ -n "$desc" ] && [ "$desc" != "$host" ]; then
+                  echo "- **$desc** (\`$host\`): Updated alert issue #$EXISTING_ISSUE ($remaining_label)." >> "$ALERT_ISSUES_FILE"
+                else
+                  echo "- \`$host\`: Updated alert issue #$EXISTING_ISSUE ($remaining_label)." >> "$ALERT_ISSUES_FILE"
+                fi
               else
                 echo "Creating new alert issue for $host"
                 CREATE_ARGS=(--title "$issue_title" --body-file "$BODY_FILE")
@@ -103,10 +115,30 @@ jobs:
                 if [ -n "$LABELS" ]; then
                   CREATE_ARGS+=(--label "$LABELS")
                 fi
-                gh issue create "${CREATE_ARGS[@]}"
+                NEW_ISSUE_URL=$(gh issue create "${CREATE_ARGS[@]}")
+                NEW_ISSUE_NUM=$(echo "$NEW_ISSUE_URL" | grep -oE '[0-9]+$' || echo "")
+
+                issue_ref="#${NEW_ISSUE_NUM}"
+                [ -z "$NEW_ISSUE_NUM" ] && issue_ref="$NEW_ISSUE_URL"
+
+                if [ -n "$desc" ] && [ "$desc" != "$host" ]; then
+                  echo "- **$desc** (\`$host\`): Created alert issue $issue_ref ($remaining_label)." >> "$ALERT_ISSUES_FILE"
+                else
+                  echo "- \`$host\`: Created alert issue $issue_ref ($remaining_label)." >> "$ALERT_ISSUES_FILE"
+                fi
               fi
               rm -f "$BODY_FILE"
             done < <(jq -c '.[]' "$BREACHES_FILE" 2>/dev/null || true)
+
+            if [ -s "$ALERT_ISSUES_FILE" ] && [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+              {
+                echo ""
+                echo "### ⚠️ Alert Issues"
+                echo ""
+                cat "$ALERT_ISSUES_FILE"
+              } >> "$GITHUB_STEP_SUMMARY"
+            fi
+            rm -f "$ALERT_ISSUES_FILE"
           fi
 
           if [ -f "$HEALTHY_FILE" ]; then
