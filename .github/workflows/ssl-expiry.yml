@@ -77,6 +77,8 @@ jobs:
                 echo "| Status | Host | Description | Expiry Date | Days Left |"
                 echo "| :--- | :--- | :--- | :--- | :--- |"
                 echo "| $status | $display_host | $desc | $expiry_date | $days_display |"
+                echo ""
+                echo "**Renew / update:** [route-tls CSR and cert update](https://github.com/bcgov/actions-openshift/blob/main/route-tls/README.md#no-cert-yet-csr-and-update)"
               } > "$BODY_FILE"
 
               EXISTING_ISSUE=$(gh issue list --state open --json number,title --jq ".[] | select(.title | startswith(\"$search_prefix\")) | .number" | head -n 1)
