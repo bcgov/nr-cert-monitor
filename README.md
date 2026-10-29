@@ -9,7 +9,7 @@ The monitor runs on a weekly schedule (and on demand via `workflow_dispatch`) to
 ## Reports & Actions
 
 - **Run Summaries & Dashboard**: Live certificate inspection summaries for every run are available directly on the [SSL Expiry Monitor Actions page](https://github.com/bcgov/nr-cert-monitor/actions/workflows/ssl-expiry.yml). Each run summary provides an at-a-glance table of all monitored domains, expiry dates, remaining days, and status, and highlights any created, updated, or resolved alert issues.
-- **Alert Issues**: Certificate expiry breaches automatically create or update an idempotent issue assigning designated maintainers. Once a certificate is renewed/updated and healthy, the monitor automatically resolves and closes the issue.
+- **Alert Issues**: Certificate expiry breaches automatically create or update an idempotent issue assigning designated maintainers. Each alert links [route-tls CSR and cert update](https://github.com/bcgov/actions-openshift/blob/main/route-tls/README.md#no-cert-yet-csr-and-update) for renewals. Once a certificate is renewed/updated and healthy, the monitor automatically resolves and closes the issue.
 
 ## Configuration
 
