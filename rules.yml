@@ -26,6 +26,8 @@ monitoring:
       description: "Forest Operations Map"
       assignees:
         - DerekRoberts
+        - OlgaLiber2
+        - arcshiftsolutions
     - host: "fspts.nrs.gov.bc.ca"
       description: "Forest Seed Planning and Tracking"
       assignees:
@@ -65,3 +67,27 @@ monitoring:
         - paulushcgcj
         - Abradat
         - craigyu
+    - host: "fam.nrs.gov.bc.ca"
+      description: "Forest and Range Evaluation Program"
+      assignees:
+        - DerekRoberts
+        - OlgaLiber2
+        - arcshiftsolutions
+    - host: "frep.nrs.gov.bc.ca"
+      description: "Forest and Range Evaluation Program"
+      assignees:
+        - DerekRoberts
+        - OlgaLiber2
+        - SodhiA1
+    - host: "lexis.nrs.gov.bc.ca"
+      description: "Log Exemption Information System"
+      assignees:
+        - DerekRoberts
+        - OlgaLiber2
+        - alexmcdermid
+    - host: "fta.nrs.gov.bc.ca"
+      description: "Forest Tenures Administration"
+      assignees:
+        - DerekRoberts
+        - OlgaLiber2
+        - arcshiftsolutions
