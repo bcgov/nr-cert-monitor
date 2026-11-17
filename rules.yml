@@ -37,7 +37,7 @@ monitoring:
         - paulushcgcj
         - xiaopeng0202
         - ngunner15
-        - craigyu
+        - mightycox
     - host: "hydra.nrs.gov.bc.ca"
       description: "Hydra Rating Curve"
       assignees:
