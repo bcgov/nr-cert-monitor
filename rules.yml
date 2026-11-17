@@ -65,3 +65,15 @@ monitoring:
         - paulushcgcj
         - Abradat
         - craigyu
+    - host: "frep.nrs.gov.bc.ca"
+      description: "Forest and Range Evaluation Program"
+      assignees:
+        - DerekRoberts
+    - host: "lexis.nrs.gov.bc.ca"
+      description: "Log Exemption Information System"
+      assignees:
+        - DerekRoberts
+    - host: "fta.nrs.gov.bc.ca"
+      description: "Forest Tenures Administration"
+      assignees:
+        - DerekRoberts
