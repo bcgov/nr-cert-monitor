@@ -2,17 +2,22 @@ name: SSL Expiry Monitor
 
 on:
   schedule:
-    - cron: '0 14 * * 1'
+    - cron: '0 14 * * *'
   workflow_dispatch:
+  pull_request:
+    paths:
+      - '.github/workflows/ssl-expiry.yml'
+      - 'scripts/check-certs.sh'
 
-permissions:
-  contents: read
-  issues: write
+permissions: {}
 
 jobs:
   check-ssl:
     name: Check SSL/TLS Expiry
     runs-on: ubuntu-26.04
+    permissions:
+      contents: read
+      issues: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -24,6 +29,7 @@ jobs:
       - name: Manage GitHub Alert Issues
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DRY_RUN: ${{ github.event_name == 'pull_request' }}
           TITLE_PREFIX: ${{ steps.cert-audit.outputs.title_prefix }}
           LABELS: ${{ steps.cert-audit.outputs.labels }}
           BREACHES_FILE: ${{ steps.cert-audit.outputs.breaches_file }}
@@ -34,7 +40,11 @@ jobs:
             for lbl in "${LABEL_ARRAY[@]}"; do
               lbl=$(echo "$lbl" | xargs)
               if [ -n "$lbl" ]; then
-                gh label create "$lbl" --force 2>/dev/null || true
+                if [ "$DRY_RUN" = "true" ]; then
+                  echo "[DRY RUN] Would ensure label '$lbl'"
+                else
+                  gh label create "$lbl" --force 2>/dev/null || true
+                fi
               fi
             done
           fi
@@ -46,23 +56,35 @@ jobs:
               host=$(echo "$breach" | jq -r '.host')
               desc=$(echo "$breach" | jq -r '.description')
               port=$(echo "$breach" | jq -r '.port')
+              state=$(echo "$breach" | jq -r '.state // ""')
               status=$(echo "$breach" | jq -r '.status')
               expiry_date=$(echo "$breach" | jq -r '.expiry_date')
               days_left=$(echo "$breach" | jq -r '.days_left')
+              lifetime_days=$(echo "$breach" | jq -r '.lifetime_days // "N/A"')
               assignees=$(echo "$breach" | jq -r '.assignees')
 
               search_prefix="${TITLE_PREFIX}${host}"
-              if [ "$days_left" != "null" ] && [ "$days_left" != "N/A" ]; then
-                issue_title="${search_prefix} (${days_left}d remaining)"
-                days_display="${days_left}d"
-              else
+              if [ "$state" = "unreachable" ] || [ "$days_left" = "null" ] || [ "$days_left" = "N/A" ]; then
                 issue_title="${search_prefix} (unreachable)"
                 days_display="N/A"
+                remaining_label="unreachable"
+                alert_reason="connection or TLS handshake failure"
+              elif [ "$state" = "uncovered" ]; then
+                issue_title="${search_prefix} (cert does not cover host)"
+                days_display="${days_left}d"
+                remaining_label="cert does not cover host"
+                alert_reason="the served certificate does not cover **$host** (for example, it is using the router default or another host's certificate)"
+              else
+                issue_title="${search_prefix} (${days_left}d remaining)"
+                days_display="${days_left}d"
+                remaining_label="${days_display} remaining"
+                alert_reason="upcoming SSL/TLS certificate expiration"
               fi
 
-              remaining_label="${days_display} remaining"
-              if [ "$days_display" = "N/A" ]; then
-                remaining_label="unreachable"
+              if [ "$lifetime_days" = "N/A" ] || [ "$lifetime_days" = "null" ] || [ -z "$lifetime_days" ]; then
+                lifetime_display="N/A"
+              else
+                lifetime_display="${lifetime_days}d"
               fi
 
               display_host="$host"
@@ -72,13 +94,13 @@ jobs:
               {
                 echo "### ⚠️ SSL/TLS Certificate Expiry Alert: $host"
                 echo ""
-                echo "The domain **$host** ($desc) requires attention due to upcoming SSL/TLS certificate expiration or connection failure."
+                echo "The domain **$host** ($desc) requires attention due to ${alert_reason}."
                 echo ""
-                echo "| Status | Host | Description | Expiry Date | Days Left |"
-                echo "| :--- | :--- | :--- | :--- | :--- |"
-                echo "| $status | $display_host | $desc | $expiry_date | $days_display |"
+                echo "| Status | Host | Description | Expiry Date | Days Left | Lifetime |"
+                echo "| :--- | :--- | :--- | :--- | :--- | :--- |"
+                echo "| $status | $display_host | $desc | $expiry_date | $days_display | $lifetime_display |"
                 echo ""
-                echo "**Renew / update:** [route-tls CSR and cert update](https://github.com/bcgov/actions-openshift/blob/main/route-tls/README.md#no-cert-yet-csr-and-update)"
+                echo "**Renew / update:** [cert-keeper](https://github.com/bcgov/actions-openshift/blob/main/cert-keeper/README.md#add-a-host-step-by-step)"
               } > "$BODY_FILE"
 
               EXISTING_ISSUE=$(gh issue list --state open --json number,title --jq ".[] | select(.title | startswith(\"$search_prefix\")) | .number" | head -n 1)
@@ -92,41 +114,56 @@ jobs:
               fi
 
               if [ -n "$EXISTING_ISSUE" ]; then
-                echo "Updating existing open issue #$EXISTING_ISSUE for $host"
-                EDIT_ARGS=("$EXISTING_ISSUE" --title "$issue_title")
-                if [ -n "$assignees" ]; then
-                  EDIT_ARGS+=(--add-assignee "$assignees")
+                if [ "$DRY_RUN" = "true" ]; then
+                  echo "[DRY RUN] Would update existing open issue #$EXISTING_ISSUE for $host: $issue_title"
+                  issue_action="Would update"
+                else
+                  echo "Updating existing open issue #$EXISTING_ISSUE for $host"
+                  EDIT_ARGS=("$EXISTING_ISSUE" --title "$issue_title")
+                  if [ -n "$assignees" ]; then
+                    EDIT_ARGS+=(--add-assignee "$assignees")
+                  fi
+                  if [ -n "$LABELS" ]; then
+                    EDIT_ARGS+=(--add-label "$LABELS")
+                  fi
+                  gh issue edit "${EDIT_ARGS[@]}"
+                  gh issue comment "$EXISTING_ISSUE" --body-file "$BODY_FILE"
+                  issue_action="Updated"
                 fi
-                if [ -n "$LABELS" ]; then
-                  EDIT_ARGS+=(--add-label "$LABELS")
-                fi
-                gh issue edit "${EDIT_ARGS[@]}"
-                gh issue comment "$EXISTING_ISSUE" --body-file "$BODY_FILE"
 
                 if [ -n "$desc" ] && [ "$desc" != "$host" ]; then
-                  echo "- **$desc** (\`$host\`): Updated alert issue #$EXISTING_ISSUE ($remaining_label)." >> "$ALERT_ISSUES_FILE"
+                  echo "- **$desc** (\`$host\`): ${issue_action} alert issue #$EXISTING_ISSUE ($remaining_label)." >> "$ALERT_ISSUES_FILE"
                 else
-                  echo "- \`$host\`: Updated alert issue #$EXISTING_ISSUE ($remaining_label)." >> "$ALERT_ISSUES_FILE"
+                  echo "- \`$host\`: ${issue_action} alert issue #$EXISTING_ISSUE ($remaining_label)." >> "$ALERT_ISSUES_FILE"
                 fi
               else
-                echo "Creating new alert issue for $host"
-                CREATE_ARGS=(--title "$issue_title" --body-file "$BODY_FILE")
-                if [ -n "$assignees" ]; then
-                  CREATE_ARGS+=(--assignee "$assignees")
-                fi
-                if [ -n "$LABELS" ]; then
-                  CREATE_ARGS+=(--label "$LABELS")
-                fi
-                NEW_ISSUE_URL=$(gh issue create "${CREATE_ARGS[@]}")
-                NEW_ISSUE_NUM=$(echo "$NEW_ISSUE_URL" | grep -oE '[0-9]+$' || echo "")
-
-                issue_ref="#${NEW_ISSUE_NUM}"
-                [ -z "$NEW_ISSUE_NUM" ] && issue_ref="$NEW_ISSUE_URL"
-
-                if [ -n "$desc" ] && [ "$desc" != "$host" ]; then
-                  echo "- **$desc** (\`$host\`): Created alert issue $issue_ref ($remaining_label)." >> "$ALERT_ISSUES_FILE"
+                if [ "$DRY_RUN" = "true" ]; then
+                  echo "[DRY RUN] Would create alert issue for $host: $issue_title"
+                  if [ -n "$desc" ] && [ "$desc" != "$host" ]; then
+                    echo "- **$desc** (\`$host\`): Would create alert issue ($remaining_label)." >> "$ALERT_ISSUES_FILE"
+                  else
+                    echo "- \`$host\`: Would create alert issue ($remaining_label)." >> "$ALERT_ISSUES_FILE"
+                  fi
                 else
-                  echo "- \`$host\`: Created alert issue $issue_ref ($remaining_label)." >> "$ALERT_ISSUES_FILE"
+                  echo "Creating new alert issue for $host"
+                  CREATE_ARGS=(--title "$issue_title" --body-file "$BODY_FILE")
+                  if [ -n "$assignees" ]; then
+                    CREATE_ARGS+=(--assignee "$assignees")
+                  fi
+                  if [ -n "$LABELS" ]; then
+                    CREATE_ARGS+=(--label "$LABELS")
+                  fi
+                  NEW_ISSUE_URL=$(gh issue create "${CREATE_ARGS[@]}")
+                  NEW_ISSUE_NUM=$(echo "$NEW_ISSUE_URL" | grep -oE '[0-9]+$' || echo "")
+
+                  issue_ref="#${NEW_ISSUE_NUM}"
+                  [ -z "$NEW_ISSUE_NUM" ] && issue_ref="$NEW_ISSUE_URL"
+
+                  if [ -n "$desc" ] && [ "$desc" != "$host" ]; then
+                    echo "- **$desc** (\`$host\`): Created alert issue $issue_ref ($remaining_label)." >> "$ALERT_ISSUES_FILE"
+                  else
+                    echo "- \`$host\`: Created alert issue $issue_ref ($remaining_label)." >> "$ALERT_ISSUES_FILE"
+                  fi
                 fi
               fi
               rm -f "$BODY_FILE"
@@ -135,7 +172,11 @@ jobs:
             if [ -s "$ALERT_ISSUES_FILE" ] && [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
               {
                 echo ""
-                echo "### ⚠️ Alert Issues"
+                if [ "$DRY_RUN" = "true" ]; then
+                  echo "### ⚠️ Alert Issues (Dry Run)"
+                else
+                  echo "### ⚠️ Alert Issues"
+                fi
                 echo ""
                 cat "$ALERT_ISSUES_FILE"
               } >> "$GITHUB_STEP_SUMMARY"
@@ -164,14 +205,22 @@ jobs:
                   prev_state="expiring"
                   if [[ "$issue_title" =~ unreachable ]]; then
                     prev_state="unreachable"
+                  elif [[ "$issue_title" =~ does[[:space:]]not[[:space:]]cover|uncovered ]]; then
+                    prev_state="uncovered"
                   elif [[ "$issue_title" =~ -[0-9]+d[[:space:]]remaining ]]; then
                     prev_state="expired"
                   fi
 
-                  echo "Resolving and closing issue #$issue_num: certificate for $host is renewed/healthy ($expiry_date, ${days_left}d remaining)"
-                  gh issue close "$issue_num" \
-                    --comment "✅ **SSL/TLS Certificate Renewed:** The certificate for **$host** has been renewed/updated. It expires in ${days_left} days ($expiry_date). Automatically resolving and closing this alert." \
-                    --reason "completed"
+                  if [ "$DRY_RUN" = "true" ]; then
+                    echo "[DRY RUN] Would resolve and close issue #$issue_num for $host ($expiry_date, ${days_left}d remaining)"
+                    close_verb="would be closed"
+                  else
+                    echo "Resolving and closing issue #$issue_num: certificate for $host is renewed/healthy ($expiry_date, ${days_left}d remaining)"
+                    gh issue close "$issue_num" \
+                      --comment "✅ **SSL/TLS Certificate Renewed:** The certificate for **$host** has been renewed/updated. It expires in ${days_left} days ($expiry_date). Automatically resolving and closing this alert." \
+                      --reason "completed"
+                    close_verb="closed"
+                  fi
 
                   remaining_display=""
                   if [ -n "$days_left" ] && [ "$days_left" != "N/A" ] && [ "$days_left" != "null" ]; then
@@ -179,9 +228,9 @@ jobs:
                   fi
 
                   if [ -n "$desc" ] && [ "$desc" != "$host" ]; then
-                    echo "- **$desc** (\`$host\`) turned from $prev_state to good, issue #$issue_num closed${remaining_display}." >> "$RESOLVED_FILE"
+                    echo "- **$desc** (\`$host\`) turned from $prev_state to good, issue #$issue_num ${close_verb}${remaining_display}." >> "$RESOLVED_FILE"
                   else
-                    echo "- **$host** turned from $prev_state to good, issue #$issue_num closed${remaining_display}." >> "$RESOLVED_FILE"
+                    echo "- **$host** turned from $prev_state to good, issue #$issue_num ${close_verb}${remaining_display}." >> "$RESOLVED_FILE"
                   fi
                 done <<< "$OPEN_ISSUES"
               fi
@@ -190,7 +239,11 @@ jobs:
             if [ -s "$RESOLVED_FILE" ] && [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
               {
                 echo ""
-                echo "### 🔄 Resolved Issues"
+                if [ "$DRY_RUN" = "true" ]; then
+                  echo "### 🔄 Resolved Issues (Dry Run)"
+                else
+                  echo "### 🔄 Resolved Issues"
+                fi
                 echo ""
                 cat "$RESOLVED_FILE"
               } >> "$GITHUB_STEP_SUMMARY"
