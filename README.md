@@ -4,20 +4,19 @@
 
 Declarative SSL/TLS certificate expiry monitor for Natural Resources production vanity URLs.
 
-The monitor runs on a weekly schedule (and on demand via `workflow_dispatch`) to inspect TLS endpoints via SNI handshakes. If any certificate is approaching expiration or unreachable, an alert issue is automatically created or updated with current diagnostic details.
+The monitor runs on a daily schedule (and on demand via `workflow_dispatch`) to inspect TLS endpoints via SNI handshakes. It alerts when a certificate has one third of its lifetime minus 3 days or less remaining (e.g., 63 days on a 198-day certificate, 27 on 90, 18 on 64, 12 on 47), when the served certificate does not cover the host, or when an endpoint is unreachable. An alert issue is automatically created or updated with current diagnostic details.
 
 ## Reports & Actions
 
-- **Run Summaries & Dashboard**: Live certificate inspection summaries for every run are available directly on the [SSL Expiry Monitor Actions page](https://github.com/bcgov/nr-cert-monitor/actions/workflows/ssl-expiry.yml). Each run summary provides an at-a-glance table of all monitored domains, expiry dates, remaining days, and status, and highlights any created, updated, or resolved alert issues.
-- **Alert Issues**: Certificate expiry breaches automatically create or update an idempotent issue assigning designated maintainers. Each alert links [route-tls CSR and cert update](https://github.com/bcgov/actions-openshift/blob/main/route-tls/README.md#no-cert-yet-csr-and-update) for renewals. Once a certificate is renewed/updated and healthy, the monitor automatically resolves and closes the issue.
+- **Run Summaries & Dashboard**: Live certificate inspection summaries for every run are available directly on the [SSL Expiry Monitor Actions page](https://github.com/bcgov/nr-cert-monitor/actions/workflows/ssl-expiry.yml). Each run summary provides an at-a-glance table of all monitored domains, expiry dates, remaining days, lifetime, and status, and highlights any created, updated, or resolved alert issues.
+- **Alert Issues**: Certificate breaches automatically create or update an idempotent issue assigning designated maintainers. Each alert links [cert-keeper](https://github.com/bcgov/actions-openshift/blob/main/cert-keeper/README.md#add-a-host-step-by-step) for renewals. Once a certificate is renewed/updated and healthy, the monitor automatically resolves and closes the issue.
 
 ## Configuration
 
-All endpoints, thresholds, and issue parameters are defined in [`rules.yml`](rules.yml):
+All endpoints and issue parameters are defined in [`rules.yml`](rules.yml):
 
 ```yaml
 technical:
-  warning_days: 30     # Threshold in days before triggering an alert
   timeout_seconds: 10  # Hard timeout per TLS handshake
   port: 443            # Default TLS port
 
