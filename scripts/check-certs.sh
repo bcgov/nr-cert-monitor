@@ -1,13 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Keep in step with bcgov/actions-openshift cert-keeper/check.sh:
-# cert-keeper renews at 1/3 of lifetime left; alert 3 days later.
-LIFETIME_DIVISOR=3
-MARGIN_DAYS=3
-
 # Fail-fast tool checks
-for cmd in openssl jq date timeout; do
+for cmd in openssl jq date; do
   if ! command -v "$cmd" >/dev/null 2>&1; then
     echo "::error::Required command '$cmd' is not installed or not in PATH." >&2
     exit 1
@@ -43,9 +38,9 @@ if [ -z "$CONFIG_JSON" ] || [ "$CONFIG_JSON" = "null" ]; then
   exit 1
 fi
 
-# Strict declarative validation: reject removed warning_days and require all active keys.
-if echo "$CONFIG_JSON" | jq -e '(.technical | has("warning_days")) or (.monitoring.domains | any(has("warning_days")))' >/dev/null 2>&1; then
-  echo "::error::warning_days is no longer supported; alerts trigger at 1/${LIFETIME_DIVISOR} of certificate lifetime minus ${MARGIN_DAYS} days" >&2
+# Strict declarative validation: Every required key must be present and non-empty.
+if ! echo "$CONFIG_JSON" | jq -e '.technical.warning_days | type == "number" and . > 0' >/dev/null 2>&1; then
+  echo "::error::Missing or invalid required key: .technical.warning_days (must be a positive number)" >&2
   exit 1
 fi
 
@@ -80,6 +75,7 @@ if ! echo "$CONFIG_JSON" | jq -e '.monitoring.domains | all((.assignees | type =
 fi
 
 # Extract technical defaults and issue settings
+TECH_WARN_DAYS=$(echo "$CONFIG_JSON" | jq -r '.technical.warning_days')
 TECH_TIMEOUT_SEC=$(echo "$CONFIG_JSON" | jq -r '.technical.timeout_seconds')
 TECH_PORT=$(echo "$CONFIG_JSON" | jq -r '.technical.port')
 TITLE_PREFIX=$(echo "$CONFIG_JSON" | jq -r '.issue.title_prefix')
@@ -92,31 +88,6 @@ breach_rows=""
 breaches_array=()
 healthy_array=()
 
-record_breach() {
-  local host="$1" desc="$2" port="$3" display_host="$4" state="$5" status="$6" expiry_date="$7" days_left="$8" lifetime_days="$9" threshold_days="${10}" assignees="${11}"
-  local days_display="${days_left}d"
-  local lifetime_display="${lifetime_days}d"
-  [ "$days_left" = "N/A" ] && days_display="N/A"
-  [ "$lifetime_days" = "N/A" ] && lifetime_display="N/A"
-
-  has_breach="true"
-  breach_count=$((breach_count + 1))
-  breach_rows+=$'\n'"| $status | $display_host | $desc | $expiry_date | $days_display | $lifetime_display |"
-  summary_rows+=$'\n'"| $status | $display_host | $desc | $expiry_date | $days_display | $lifetime_display |"
-  breaches_array+=("$(jq -cn \
-    --arg host "$host" \
-    --arg desc "$desc" \
-    --argjson port "$port" \
-    --arg state "$state" \
-    --arg status "$status" \
-    --arg expiry_date "$expiry_date" \
-    --arg days_left "$days_left" \
-    --arg lifetime_days "$lifetime_days" \
-    --arg threshold "$threshold_days" \
-    --arg assignees "$assignees" \
-    '{host: $host, description: $desc, port: $port, state: $state, status: $status, expiry_date: $expiry_date, days_left: $days_left, lifetime_days: $lifetime_days, threshold: $threshold, assignees: $assignees}')")
-}
-
 echo "[AUDIT] Starting SSL/TLS certificate inspection with config: $CONFIG_FILE"
 
 # Iterate over each monitored domain
@@ -126,66 +97,96 @@ while IFS= read -r domain_json; do
   host=$(echo "$domain_json" | jq -r '.host')
   desc=$(echo "$domain_json" | jq -r '.description')
   port=$(echo "$domain_json" | jq -r --argjson default_port "$TECH_PORT" '.port // $default_port')
+  warn_days=$(echo "$domain_json" | jq -r --argjson default_warn "$TECH_WARN_DAYS" '.warning_days // $default_warn')
   domain_assignees=$(echo "$domain_json" | jq -r '.assignees | join(",")')
 
   display_host="$host"
   [ "$port" != "443" ] && display_host="${host}:${port}"
 
-  # Read leaf certificate (public) with timeout and SNI (-servername)
-  cert=$(timeout "$TECH_TIMEOUT_SEC" openssl s_client -servername "$host" -connect "${host}:${port}" </dev/null 2>/dev/null \
-    | openssl x509 2>/dev/null || true)
+  # Run openssl s_client with timeout and SNI (-servername)
+  cert_raw=$(timeout "$TECH_TIMEOUT_SEC" openssl s_client -servername "$host" -connect "${host}:${port}" </dev/null 2>/dev/null || true)
+  enddate_line=$(echo "$cert_raw" | openssl x509 -noout -enddate 2>/dev/null || true)
 
-  if [ -z "$cert" ]; then
-    echo "[AUDIT] BREACH (Unreachable): $host:$port ($desc) - Connection or TLS handshake failed"
-    record_breach "$host" "$desc" "$port" "$display_host" "unreachable" "❌ Unreachable" "N/A" "N/A" "N/A" "N/A" "$domain_assignees"
-    continue
-  fi
+  if [[ "$enddate_line" =~ notAfter=(.*) ]]; then
+    expiry_str="${BASH_REMATCH[1]}"
+    if expiry_epoch=$(date -u -d "$expiry_str" +%s 2>/dev/null); then
+      now_epoch=$(date -u +%s)
+      days_left=$(( (expiry_epoch - now_epoch) / 86400 ))
+      formatted_date=$(date -u -d "$expiry_str" "+%Y-%m-%d")
 
-  not_before=$(openssl x509 -noout -startdate <<< "$cert" 2>/dev/null | cut -d= -f2- || true)
-  not_after=$(openssl x509 -noout -enddate <<< "$cert" 2>/dev/null | cut -d= -f2- || true)
-  start_epoch=$(date -u -d "$not_before" +%s 2>/dev/null || true)
-  end_epoch=$(date -u -d "$not_after" +%s 2>/dev/null || true)
-
-  if [ -z "$start_epoch" ] || [ -z "$end_epoch" ]; then
-    echo "[AUDIT] BREACH (Unreachable): $host:$port ($desc) - Invalid certificate validity dates"
-    record_breach "$host" "$desc" "$port" "$display_host" "unreachable" "❌ Unreachable" "N/A" "N/A" "N/A" "N/A" "$domain_assignees"
-    continue
-  fi
-
-  now_epoch=$(date -u +%s)
-  days_left=$(( (end_epoch - now_epoch) / 86400 ))
-  lifetime_days=$(( (end_epoch - start_epoch) / 86400 ))
-  formatted_date=$(date -u -d "@${end_epoch}" "+%Y-%m-%d")
-
-  # Alert when 1/LIFETIME_DIVISOR of lifetime is left, minus MARGIN_DAYS
-  limit_sec=$(( (end_epoch - start_epoch) / LIFETIME_DIVISOR - MARGIN_DAYS * 86400 ))
-  (( limit_sec >= 0 )) || limit_sec=0
-  threshold_days=$(( limit_sec / 86400 ))
-
-  covers=$(openssl x509 -noout -checkhost "$host" <<< "$cert" 2>/dev/null || true)
-
-  if [[ "$covers" != *"does match"* ]]; then
-    echo "[AUDIT] BREACH (Uncovered): $host:$port ($desc) - Served certificate does not cover $host (expires $formatted_date, ${days_left}d left)"
-    record_breach "$host" "$desc" "$port" "$display_host" "uncovered" "🚫 Uncovered" "$formatted_date" "$days_left" "$lifetime_days" "$threshold_days" "$domain_assignees"
-  elif (( end_epoch <= now_epoch )); then
-    echo "[AUDIT] BREACH (Expired): $host:$port ($desc) - Expired $(( -1 * days_left )) day(s) ago ($formatted_date)"
-    record_breach "$host" "$desc" "$port" "$display_host" "expired" "🚨 Expired" "$formatted_date" "$days_left" "$lifetime_days" "$threshold_days" "$domain_assignees"
-  elif (( end_epoch - now_epoch <= limit_sec )); then
-    echo "[AUDIT] BREACH (Expiring): $host:$port ($desc) - Expires in $days_left day(s) of ${lifetime_days}d lifetime (threshold: ${threshold_days}d, expiry: $formatted_date)"
-    record_breach "$host" "$desc" "$port" "$display_host" "expiring" "⚠️ Expiring" "$formatted_date" "$days_left" "$lifetime_days" "$threshold_days" "$domain_assignees"
+      if [ "$days_left" -lt "$warn_days" ]; then
+        has_breach="true"
+        breach_count=$((breach_count + 1))
+        if [ "$days_left" -lt 0 ]; then
+          status="🚨 Expired"
+          echo "[AUDIT] BREACH (Expired): $host:$port ($desc) - Expired $(( -1 * days_left )) day(s) ago ($formatted_date)"
+        else
+          status="⚠️ Expiring"
+          echo "[AUDIT] BREACH (Expiring): $host:$port ($desc) - Expires in $days_left day(s) (threshold: ${warn_days}d, expiry: $formatted_date)"
+        fi
+        breach_rows+=$'\n'"| $status | $display_host | $desc | $formatted_date | ${days_left}d |"
+        breach_obj=$(jq -n \
+          --arg host "$host" \
+          --arg desc "$desc" \
+          --argjson port "$port" \
+          --arg status "$status" \
+          --arg expiry_date "$formatted_date" \
+          --arg days_left "$days_left" \
+          --arg threshold "$warn_days" \
+          --arg assignees "$domain_assignees" \
+          '{host: $host, description: $desc, port: $port, status: $status, expiry_date: $expiry_date, days_left: $days_left, threshold: $threshold, assignees: $assignees}')
+        breaches_array+=("$breach_obj")
+      else
+        status="✅ Healthy"
+        echo "[AUDIT] OK: $host:$port ($desc) - Expires in $days_left day(s) ($formatted_date)"
+        healthy_obj=$(jq -n \
+          --arg host "$host" \
+          --arg desc "$desc" \
+          --argjson port "$port" \
+          --arg status "$status" \
+          --arg expiry_date "$formatted_date" \
+          --arg days_left "$days_left" \
+          '{host: $host, description: $desc, port: $port, status: $status, expiry_date: $expiry_date, days_left: $days_left}')
+        healthy_array+=("$healthy_obj")
+      fi
+      summary_rows+=$'\n'"| $status | $display_host | $desc | $formatted_date | ${days_left}d |"
+    else
+      has_breach="true"
+      breach_count=$((breach_count + 1))
+      status="❌ Unreachable"
+      echo "[AUDIT] BREACH (Unreachable): $host:$port ($desc) - Invalid certificate date format: $expiry_str"
+      breach_rows+=$'\n'"| $status | $display_host | $desc | N/A | N/A |"
+      summary_rows+=$'\n'"| $status | $display_host | $desc | N/A | N/A |"
+      breach_obj=$(jq -n \
+        --arg host "$host" \
+        --arg desc "$desc" \
+        --argjson port "$port" \
+        --arg status "$status" \
+        --arg expiry_date "N/A" \
+        --arg days_left "N/A" \
+        --arg threshold "$warn_days" \
+        --arg assignees "$domain_assignees" \
+        '{host: $host, description: $desc, port: $port, status: $status, expiry_date: $expiry_date, days_left: $days_left, threshold: $threshold, assignees: $assignees}')
+      breaches_array+=("$breach_obj")
+    fi
   else
-    status="✅ Healthy"
-    echo "[AUDIT] OK: $host:$port ($desc) - Expires in $days_left day(s) of ${lifetime_days}d lifetime (threshold: ${threshold_days}d, $formatted_date)"
-    summary_rows+=$'\n'"| $status | $display_host | $desc | $formatted_date | ${days_left}d | ${lifetime_days}d |"
-    healthy_array+=("$(jq -cn \
+    has_breach="true"
+    breach_count=$((breach_count + 1))
+    status="❌ Unreachable"
+    echo "[AUDIT] BREACH (Unreachable): $host:$port ($desc) - Connection or TLS handshake failed"
+    breach_rows+=$'\n'"| $status | $display_host | $desc | N/A | N/A |"
+    summary_rows+=$'\n'"| $status | $display_host | $desc | N/A | N/A |"
+    breach_obj=$(jq -n \
       --arg host "$host" \
       --arg desc "$desc" \
       --argjson port "$port" \
       --arg status "$status" \
-      --arg expiry_date "$formatted_date" \
-      --arg days_left "$days_left" \
-      --arg lifetime_days "$lifetime_days" \
-      '{host: $host, description: $desc, port: $port, status: $status, expiry_date: $expiry_date, days_left: $days_left, lifetime_days: $lifetime_days}')")
+      --arg expiry_date "N/A" \
+      --arg days_left "N/A" \
+      --arg threshold "$warn_days" \
+      --arg assignees "$domain_assignees" \
+      '{host: $host, description: $desc, port: $port, status: $status, expiry_date: $expiry_date, days_left: $days_left, threshold: $threshold, assignees: $assignees}')
+    breaches_array+=("$breach_obj")
   fi
 done < <(echo "$CONFIG_JSON" | jq -c '.monitoring.domains[]')
 
@@ -211,10 +212,10 @@ if [ "$has_breach" = "true" ]; then
   alert_body=$(cat <<EOF
 ### ⚠️ SSL/TLS Certificate Expiry Alert
 
-The following domain(s) require immediate attention due to upcoming SSL/TLS certificate expiration, hostname mismatch, or connection failures:
+The following domain(s) require immediate attention due to upcoming SSL/TLS certificate expiration or connection failures:
 
-| Status | Host | Description | Expiry Date | Days Left | Lifetime |
-| :--- | :--- | :--- | :--- | :--- | :--- |$breach_rows
+| Status | Host | Description | Expiry Date | Days Left |
+| :--- | :--- | :--- | :--- | :--- |$breach_rows
 EOF
 )
 else
@@ -227,10 +228,8 @@ if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
   cat <<EOF >> "$GITHUB_STEP_SUMMARY"
 ### SSL/TLS Certificate Expiry Audit Summary
 
-Reporting certificates at 1/${LIFETIME_DIVISOR} of lifetime minus ${MARGIN_DAYS} days, or when the served certificate does not cover the host.
-
-| Status | Host | Description | Expiry Date | Days Left | Lifetime |
-| :--- | :--- | :--- | :--- | :--- | :--- |$summary_rows
+| Status | Host | Description | Expiry Date | Days Left |
+| :--- | :--- | :--- | :--- | :--- |$summary_rows
 EOF
 fi
 
