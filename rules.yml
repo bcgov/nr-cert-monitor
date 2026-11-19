@@ -1,12 +1,13 @@
 # SSL/TLS Certificate Expiry Monitoring Configuration
 # User-facing configuration template - every key the engine reads is required here;
 # there are no built-in defaults.
-# Exception: issue.labels and monitoring.domains[].port are optional.
-# When absent, issue.labels means [] (no labels), and domain-level port
-# inherits from technical.port.
+# Exception: issue.labels, monitoring.domains[].warning_days, and monitoring.domains[].port
+# are optional. When absent, issue.labels means [] (no labels), and domain-level
+# warning_days/port inherit from technical defaults.
 # monitoring.domains[].assignees is REQUIRED for every domain.
 
 technical:
+  warning_days: 30 # Threshold in days before an expiry triggers an alert
   timeout_seconds: 10 # Hard timeout per TLS handshake
   port: 443 # Default TLS port
 
