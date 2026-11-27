@@ -19,7 +19,7 @@ jobs:
       contents: read
       pull-requests: read
     steps:
-      - uses: bcgov/actions/pr-validate@d209bb08aabe15e5e69aca53b24d338a7b2843d5 # v0.12.0
+      - uses: bcgov/actions/pr-validate@acc058abf85bb183dad21b839a92a40a4ff47af3 # v0.14.0
 
   results:
     name: Validate Results
